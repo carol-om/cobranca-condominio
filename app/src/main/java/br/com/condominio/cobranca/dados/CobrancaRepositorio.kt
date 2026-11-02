@@ -1,9 +1,10 @@
 package br.com.condominio.cobranca.dados
 
+import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
 
 /** Reúne o acesso aos dados sem adicionar regras de tela. */
-class CobrancaRepositorio(database: AppDatabase) {
+class CobrancaRepositorio(private val database: AppDatabase) {
     private val condominioDao = database.condominioDao()
     private val unidadeDao = database.unidadeDao()
     private val despesaDao = database.despesaDao()
@@ -12,6 +13,7 @@ class CobrancaRepositorio(database: AppDatabase) {
     fun observarCondominio(): Flow<Condominio?> = condominioDao.observar()
     fun observarUnidades(): Flow<List<Unidade>> = unidadeDao.observarTodas()
     fun observarDespesas(): Flow<List<Despesa>> = despesaDao.observarTodas()
+    fun observarUnidadesDaDespesa(despesaId: Long): Flow<List<DespesaUnidade>> = despesaDao.observarUnidades(despesaId)
     fun observarCobrancas(): Flow<List<Cobranca>> = cobrancaDao.observarTodas()
 
     suspend fun salvarCondominio(condominio: Condominio) = condominioDao.salvar(condominio)
@@ -22,6 +24,11 @@ class CobrancaRepositorio(database: AppDatabase) {
     suspend fun atualizarDespesa(despesa: Despesa) = despesaDao.atualizar(despesa)
     suspend fun excluirDespesa(despesa: Despesa) = despesaDao.excluir(despesa)
     suspend fun salvarUnidadesDaDespesa(itens: List<DespesaUnidade>) = despesaDao.salvarUnidades(itens)
+    suspend fun salvarRegraDaDespesa(despesa: Despesa, itens: List<DespesaUnidade>) = database.withTransaction {
+        despesaDao.atualizar(despesa)
+        despesaDao.excluirUnidades(despesa.id)
+        if (itens.isNotEmpty()) despesaDao.salvarUnidades(itens)
+    }
     suspend fun inserirCobranca(cobranca: Cobranca): Long = cobrancaDao.inserir(cobranca)
     suspend fun atualizarCobranca(cobranca: Cobranca) = cobrancaDao.atualizar(cobranca)
     suspend fun excluirCobranca(cobranca: Cobranca) = cobrancaDao.excluir(cobranca)

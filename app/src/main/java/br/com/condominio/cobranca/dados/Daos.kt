@@ -55,6 +55,9 @@ interface DespesaDao {
     @Query("SELECT * FROM despesa_unidade WHERE despesaId = :despesaId ORDER BY unidadeId")
     suspend fun listarUnidades(despesaId: Long): List<DespesaUnidade>
 
+    @Query("SELECT * FROM despesa_unidade WHERE despesaId = :despesaId ORDER BY unidadeId")
+    fun observarUnidades(despesaId: Long): Flow<List<DespesaUnidade>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun salvarUnidades(itens: List<DespesaUnidade>)
 
