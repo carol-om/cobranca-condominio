@@ -1,5 +1,8 @@
 package br.com.condominio.cobranca.ui
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -8,6 +11,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
@@ -19,11 +25,14 @@ import androidx.navigation.compose.rememberNavController
 import br.com.condominio.cobranca.calculo.CalculadoraDeRegras
 import br.com.condominio.cobranca.calculo.UnidadeDaRegra
 import br.com.condominio.cobranca.dados.*
+import br.com.condominio.cobranca.imagem.GeradorDeImagem
 import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewModel() {
     val condominio = repositorio.observarCondominio().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -76,10 +85,11 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
             TelaRegraDaDespesa(viewModel, id) { nav.popBackStack() }
         }
         composable("nova") { TelaNovaCobranca(viewModel) { nav.navigate("rascunho/$it") { popUpTo("inicio") } } }
-        composable("rascunho/{cobrancaId}") { entrada -> TelaRascunho(viewModel, entrada.arguments?.getString("cobrancaId")?.toLongOrNull(), { nav.navigate("regra-item/$it") }) { nav.popBackStack() } }
+        composable("rascunho/{cobrancaId}") { entrada -> TelaRascunho(viewModel, entrada.arguments?.getString("cobrancaId")?.toLongOrNull(), { nav.navigate("regra-item/$it") }, { nav.navigate("imagens/$it") { popUpTo("inicio") } }) { nav.popBackStack() } }
         composable("regra-item/{itemId}") { entrada -> TelaRegraDoItem(viewModel, entrada.arguments?.getString("itemId")?.toLongOrNull()) { nav.popBackStack() } }
-        composable("fechadas") { TelaCobrancasFechadas(viewModel, { nav.navigate("fechada/$it") }) { nav.popBackStack() } }
+        composable("fechadas") { TelaCobrancasFechadas(viewModel, { nav.navigate("imagens/$it") }) { nav.popBackStack() } }
         composable("fechada/{cobrancaId}") { entrada -> TelaDetalheCobranca(viewModel, entrada.arguments?.getString("cobrancaId")?.toLongOrNull()) { nav.popBackStack() } }
+        composable("imagens/{cobrancaId}") { entrada -> TelaImagensDaCobranca(viewModel, entrada.arguments?.getString("cobrancaId")?.toLongOrNull()) { nav.popBackStack() } }
         composable("historico-unidades") { TelaHistoricoUnidades(viewModel, { nav.navigate("historico-unidade/$it") }) { nav.popBackStack() } }
         composable("historico-unidade/{numero}") { entrada -> TelaHistoricoDaUnidade(viewModel, entrada.arguments?.getString("numero").orEmpty()) { nav.popBackStack() } }
     }
@@ -234,7 +244,7 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
 
 private fun calcularItem(item: ItemCobranca, unidades: List<Unidade>, regras: List<ItemCobrancaRegraUnidade>) = CalculadoraDeRegras.calcular(item.tipoRegra, item.valorCentavos, unidades.map { u -> regras.firstOrNull { it.unidadeId == u.id }.let { r -> UnidadeDaRegra(u.id, r?.isenta ?: false, r?.valorCentavos ?: 0, u.peso) } })
 
-@Composable private fun TelaRascunho(vm: CobrancaViewModel, cobrancaId: Long?, editar: (Long) -> Unit, voltar: () -> Unit) {
+@Composable private fun TelaRascunho(vm: CobrancaViewModel, cobrancaId: Long?, editar: (Long) -> Unit, aoFechar: (Long) -> Unit, voltar: () -> Unit) {
     if (cobrancaId == null) return
     val itens by vm.itensDaCobranca(cobrancaId).collectAsStateWithLifecycle(emptyList())
     val unidades by vm.unidades.collectAsStateWithLifecycle()
@@ -255,7 +265,7 @@ private fun calcularItem(item: ItemCobranca, unidades: List<Unidade>, regras: Li
         item { Button({ confirmar = true }, Modifier.fillMaxWidth(), enabled = itens.isNotEmpty() && unidades.isNotEmpty()) { Text("Fechar cobrança") } }
     } }
     // A lista de itens abaixo evita uma tela adicional e mantém a edição explícita.
-    if (confirmar) ConfirmarFechamento({ vm.fecharCobranca(cobrancaId) { voltar() }; confirmar = false }, { confirmar = false })
+    if (confirmar) ConfirmarFechamento({ vm.fecharCobranca(cobrancaId) { aoFechar(cobrancaId) }; confirmar = false }, { confirmar = false })
 }
 
 @Composable private fun ConfirmarFechamento(confirmar: () -> Unit, cancelar: () -> Unit) = AlertDialog(onDismissRequest = cancelar, title = { Text("Fechar cobrança?") }, text = { Text("Depois de fechada, esta cobrança não poderá ser editada.") }, confirmButton = { TextButton(confirmar) { Text("Fechar cobrança") } }, dismissButton = { TextButton(cancelar) { Text("Cancelar") } })
@@ -290,6 +300,35 @@ private fun calcularItem(item: ItemCobranca, unidades: List<Unidade>, regras: Li
     Pagina("Unidades da cobrança", voltar) { p -> LazyColumn(Modifier.padding(p).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(unidades, { it.id }) { u -> val total = linhas[u.id].orEmpty().sumOf { it.valorCentavos }; Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) { Text("Unidade ${u.numeroUnidade} — ${u.nomeMorador}"); Text("Total: ${valorFormatado(total)}", style = MaterialTheme.typography.titleMedium) } } }
         if (unidades.isEmpty()) item { Text("Carregando unidades...") }
+    } }
+}
+
+@Composable private fun TelaImagensDaCobranca(vm: CobrancaViewModel, cobrancaId: Long?, voltar: () -> Unit) {
+    val cobrancas by vm.cobrancasFechadas.collectAsStateWithLifecycle()
+    val cobranca = cobrancas.firstOrNull { it.id == cobrancaId }
+    var unidades by remember(cobrancaId) { mutableStateOf<List<CobrancaUnidade>>(emptyList()) }
+    var linhas by remember(cobrancaId) { mutableStateOf<Map<Long, List<CobrancaLinha>>>(emptyMap()) }
+    LaunchedEffect(cobrancaId) { cobrancaId?.let { vm.detalhesDaCobranca(it) { u, l -> unidades = u; linhas = l } } }
+    Pagina("Imagens da cobrança", voltar) { p -> LazyColumn(Modifier.padding(p).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (cobranca != null) items(unidades, { it.id }) { unidade -> PreviaDaImagem(cobranca, unidade, linhas[unidade.id].orEmpty()) }
+        else item { Text("Carregando cobrança...") }
+    } }
+}
+
+@Composable private fun PreviaDaImagem(cobranca: Cobranca, unidade: CobrancaUnidade, linhas: List<CobrancaLinha>) {
+    val contexto = LocalContext.current
+    val gerador = remember { GeradorDeImagem() }
+    var arquivo by remember(cobranca.id, unidade.id) { mutableStateOf<java.io.File?>(null) }
+    var bitmap by remember(cobranca.id, unidade.id) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(cobranca, unidade, linhas) {
+        val criado = withContext(Dispatchers.IO) { gerador.gerar(contexto, cobranca, unidade, linhas) }
+        arquivo = criado
+        bitmap = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(criado.absolutePath) }
+    }
+    Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("Unidade ${unidade.numeroUnidade} — ${unidade.nomeMorador}", style = MaterialTheme.typography.titleMedium)
+        bitmap?.let { Image(it.asImageBitmap(), "Prévia da cobrança", Modifier.fillMaxWidth().height(280.dp), contentScale = ContentScale.Fit) }
+        Button(onClick = { arquivo?.let { gerador.compartilhar(contexto, it) } }, enabled = arquivo != null, modifier = Modifier.fillMaxWidth()) { Text("Compartilhar") }
     } }
 }
 
