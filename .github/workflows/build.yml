@@ -1,0 +1,60 @@
+name: Compilar Android
+
+on:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v4.2.2
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4.7.1
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4.4.0
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Configurar assinatura opcional
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            keystore_path="$RUNNER_TEMP/debug-upload.keystore"
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore_path"
+            echo "KEYSTORE_PATH=$keystore_path" >> "$GITHUB_ENV"
+            echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          fi
+
+      - name: Testar e montar APK debug
+        run: gradle testDebugUnitTest assembleDebug --stacktrace
+
+      - name: Publicar APK debug
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+
+      - name: Publicar relatórios de teste
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: relatorios-de-teste
+          path: app/build/reports/tests/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Remover keystore temporário
+        if: always()
+        run: rm -f "$RUNNER_TEMP/debug-upload.keystore"
+
