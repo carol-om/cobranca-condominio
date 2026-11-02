@@ -29,6 +29,8 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
     val condominio = repositorio.observarCondominio().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val unidades = repositorio.observarUnidades().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val despesas = repositorio.observarDespesas().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val rascunho = repositorio.observarRascunho().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val cobrancasFechadas = repositorio.observarFechadas().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     fun salvarCondominio(nome: String, sindica: String, pix: String, instrucoes: String) = viewModelScope.launch {
         repositorio.salvarCondominio(Condominio(nome = nome.trim().ifBlank { null }, nomeSindica = sindica.trim(), chavePix = pix.trim(), instrucoesPagamento = instrucoes.trim()))
@@ -39,12 +41,33 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
     fun excluirDespesa(despesa: Despesa) = viewModelScope.launch { repositorio.excluirDespesa(despesa) }
     fun unidadesDaDespesa(id: Long) = repositorio.observarUnidadesDaDespesa(id)
     fun salvarRegraDaDespesa(despesa: Despesa, itens: List<DespesaUnidade>) = viewModelScope.launch { repositorio.salvarRegraDaDespesa(despesa, itens) }
+    fun itensDaCobranca(id: Long) = repositorio.observarItensDaCobranca(id)
+    fun item(id: Long) = repositorio.observarItem(id)
+    fun regraDoItem(id: Long) = repositorio.observarRegraDoItem(id)
+    fun criarRascunho(mes: Int, ano: Int, vencimento: String, usarUltima: Boolean, despesas: List<Despesa>, pronto: (Long) -> Unit) = viewModelScope.launch {
+        pronto(repositorio.criarRascunho(mes, ano, vencimento, usarUltima, despesas))
+    }
+    fun salvarRegraDoItem(item: ItemCobranca, regras: List<ItemCobrancaRegraUnidade>, pronto: () -> Unit) = viewModelScope.launch { repositorio.salvarRegraDoItem(item, regras); pronto() }
+    fun fecharCobranca(id: Long, pronto: () -> Unit) = viewModelScope.launch { repositorio.fecharCobranca(id); pronto() }
+    fun detalhesDaCobranca(id: Long, pronto: (List<CobrancaUnidade>, Map<Long, List<CobrancaLinha>>) -> Unit) = viewModelScope.launch {
+        val unidades = repositorio.listarUnidadesFechadas(id)
+        pronto(unidades, unidades.associate { it.id to repositorio.listarLinhasDaUnidade(it.id) })
+    }
+    fun historicoDaUnidade(numero: String, cobrancas: List<Cobranca>, pronto: (List<Pair<Cobranca, Pair<CobrancaUnidade, List<CobrancaLinha>>>) -> Unit) = viewModelScope.launch {
+        val resultado = mutableListOf<Pair<Cobranca, Pair<CobrancaUnidade, List<CobrancaLinha>>>>()
+        cobrancas.forEach { cobranca ->
+            repositorio.listarUnidadesFechadas(cobranca.id).firstOrNull { it.numeroUnidade == numero }?.let { unidade ->
+                resultado += cobranca to (unidade to repositorio.listarLinhasDaUnidade(unidade.id))
+            }
+        }
+        pronto(resultado)
+    }
 }
 
 @Composable fun CobrancaApp(viewModel: CobrancaViewModel) {
     val nav = rememberNavController()
     NavHost(nav, "inicio") {
-        composable("inicio") { Inicio({ nav.navigate("condominio") }, { nav.navigate("unidades") }, { nav.navigate("despesas") }) }
+        composable("inicio") { Inicio({ nav.navigate("condominio") }, { nav.navigate("unidades") }, { nav.navigate("despesas") }, { nav.navigate("nova") }, { nav.navigate("historico-unidades") }, { nav.navigate("fechadas") }) }
         composable("condominio") { TelaCondominio(viewModel) { nav.popBackStack() } }
         composable("unidades") { TelaUnidades(viewModel) { nav.popBackStack() } }
         composable("despesas") { TelaDespesas(viewModel, { nav.navigate("regra/$it") }) { nav.popBackStack() } }
@@ -52,15 +75,25 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
             val id = entrada.arguments?.getString("despesaId")?.toLongOrNull()
             TelaRegraDaDespesa(viewModel, id) { nav.popBackStack() }
         }
+        composable("nova") { TelaNovaCobranca(viewModel) { nav.navigate("rascunho/$it") { popUpTo("inicio") } } }
+        composable("rascunho/{cobrancaId}") { entrada -> TelaRascunho(viewModel, entrada.arguments?.getString("cobrancaId")?.toLongOrNull(), { nav.navigate("regra-item/$it") }) { nav.popBackStack() } }
+        composable("regra-item/{itemId}") { entrada -> TelaRegraDoItem(viewModel, entrada.arguments?.getString("itemId")?.toLongOrNull()) { nav.popBackStack() } }
+        composable("fechadas") { TelaCobrancasFechadas(viewModel, { nav.navigate("fechada/$it") }) { nav.popBackStack() } }
+        composable("fechada/{cobrancaId}") { entrada -> TelaDetalheCobranca(viewModel, entrada.arguments?.getString("cobrancaId")?.toLongOrNull()) { nav.popBackStack() } }
+        composable("historico-unidades") { TelaHistoricoUnidades(viewModel, { nav.navigate("historico-unidade/$it") }) { nav.popBackStack() } }
+        composable("historico-unidade/{numero}") { entrada -> TelaHistoricoDaUnidade(viewModel, entrada.arguments?.getString("numero").orEmpty()) { nav.popBackStack() } }
     }
 }
 
-@Composable private fun Inicio(condominio: () -> Unit, unidades: () -> Unit, despesas: () -> Unit) = Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
+@Composable private fun Inicio(condominio: () -> Unit, unidades: () -> Unit, despesas: () -> Unit, nova: () -> Unit, historico: () -> Unit, fechadas: () -> Unit) = Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
     Text("Cobrança de condomínio")
     Column(Modifier.fillMaxWidth().padding(top = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(condominio, Modifier.fillMaxWidth()) { Text("Condomínio") }
         Button(unidades, Modifier.fillMaxWidth()) { Text("Unidades") }
         Button(despesas, Modifier.fillMaxWidth()) { Text("Despesas") }
+        Button(nova, Modifier.fillMaxWidth()) { Text("Nova cobrança") }
+        Button(historico, Modifier.fillMaxWidth()) { Text("Histórico por unidade") }
+        Button(fechadas, Modifier.fillMaxWidth()) { Text("Cobranças fechadas") }
     }
 }
 
@@ -175,6 +208,110 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
         Text("Total: ${valorFormatado(valores.values.sum())}")
     }
 } }
+
+@Composable private fun TelaNovaCobranca(vm: CobrancaViewModel, abrir: (Long) -> Unit) {
+    val despesas by vm.despesas.collectAsStateWithLifecycle()
+    val fechadas by vm.cobrancasFechadas.collectAsStateWithLifecycle()
+    val rascunho by vm.rascunho.collectAsStateWithLifecycle()
+    var mes by remember { mutableStateOf("") }; var ano by remember { mutableStateOf("") }; var vencimento by remember { mutableStateOf("") }
+    var usarUltima by remember { mutableStateOf(fechadas.isNotEmpty()) }; var selecionadas by remember { mutableStateOf<Set<Long>>(emptySet()) }; var tentou by remember { mutableStateOf(false) }
+    Pagina("Nova cobrança", {}) { p -> LazyColumn(Modifier.padding(p).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (rascunho != null) {
+            item { Text("Já existe um rascunho. Termine ou feche essa cobrança antes de criar outra.") }
+            item { Button({ abrir(rascunho!!.id) }, Modifier.fillMaxWidth()) { Text("Abrir rascunho") } }
+        } else {
+            item { Campo(mes, { mes = it }, "Mês (1 a 12)", tentou && mes.toIntOrNull() !in 1..12, KeyboardOptions(keyboardType = KeyboardType.Number)) }
+            item { Campo(ano, { ano = it }, "Ano", tentou && (ano.toIntOrNull() ?: 0) < 2000, KeyboardOptions(keyboardType = KeyboardType.Number)) }
+            item { Campo(vencimento, { vencimento = it }, "Vencimento (ex.: 10/01/2027)", tentou && vencimento.isBlank()) }
+            item { Text("Itens da cobrança", style = MaterialTheme.typography.titleMedium) }
+            if (fechadas.isNotEmpty()) item { Row(Modifier.clickable { usarUltima = true }, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { RadioButton(usarUltima, { usarUltima = true }); Text("Partir da última cobrança fechada") } }
+            item { Row(Modifier.clickable { usarUltima = false }, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { RadioButton(!usarUltima, { usarUltima = false }); Text("Marcar despesas cadastradas") } }
+            if (!usarUltima) items(despesas, { it.id }) { d -> Row(Modifier.fillMaxWidth().clickable { selecionadas = if (d.id in selecionadas) selecionadas - d.id else selecionadas + d.id }.padding(vertical = 4.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { Checkbox(d.id in selecionadas, null); Text(d.nome) } }
+            item { Button(onClick = { tentou = true; val m = mes.toIntOrNull(); val a = ano.toIntOrNull(); if (m != null && m in 1..12 && a != null && a >= 2000 && vencimento.isNotBlank() && (usarUltima || selecionadas.isNotEmpty())) vm.criarRascunho(m, a, vencimento.trim(), usarUltima, despesas.filter { it.id in selecionadas }, abrir) }, modifier = Modifier.fillMaxWidth()) { Text("Criar rascunho") } }
+        }
+    } }
+}
+
+private fun calcularItem(item: ItemCobranca, unidades: List<Unidade>, regras: List<ItemCobrancaRegraUnidade>) = CalculadoraDeRegras.calcular(item.tipoRegra, item.valorCentavos, unidades.map { u -> regras.firstOrNull { it.unidadeId == u.id }.let { r -> UnidadeDaRegra(u.id, r?.isenta ?: false, r?.valorCentavos ?: 0, u.peso) } })
+
+@Composable private fun TelaRascunho(vm: CobrancaViewModel, cobrancaId: Long?, editar: (Long) -> Unit, voltar: () -> Unit) {
+    if (cobrancaId == null) return
+    val itens by vm.itensDaCobranca(cobrancaId).collectAsStateWithLifecycle(emptyList())
+    val unidades by vm.unidades.collectAsStateWithLifecycle()
+    val calculos = itens.map { item ->
+        val regras by vm.regraDoItem(item.id).collectAsStateWithLifecycle(emptyList())
+        item to calcularItem(item, unidades, regras)
+    }
+    var confirmar by remember { mutableStateOf(false) }
+    Pagina("Conferência da cobrança", voltar) { p -> LazyColumn(Modifier.padding(p).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { Text("Conferência por unidade", style = MaterialTheme.typography.titleMedium) }
+        items(unidades, { it.id }) { unidade ->
+            val itensDaUnidade = calculos.mapNotNull { (item, valores) -> valores[unidade.id]?.takeIf { it > 0 }?.let { item.nome to it } }
+            Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text("Unidade ${unidade.numero} — ${unidade.nomeMorador}", style = MaterialTheme.typography.titleMedium); itensDaUnidade.forEach { (nome, valor) -> Text("$nome: ${valorFormatado(valor)}") }; Text("Total: ${valorFormatado(itensDaUnidade.sumOf { it.second })}") }
+        }
+        item { Text("Itens do mês (toque para editar)", style = MaterialTheme.typography.titleMedium) }
+        items(calculos, { it.first.id }) { (item, _) -> Card(Modifier.fillMaxWidth().clickable { editar(item.id) }) { Text(item.nome, Modifier.padding(12.dp)) } }
+        item { Text("Total geral: ${valorFormatado(calculos.sumOf { it.second.values.sum() })}", style = MaterialTheme.typography.titleMedium) }
+        item { Button({ confirmar = true }, Modifier.fillMaxWidth(), enabled = itens.isNotEmpty() && unidades.isNotEmpty()) { Text("Fechar cobrança") } }
+    } }
+    // A lista de itens abaixo evita uma tela adicional e mantém a edição explícita.
+    if (confirmar) ConfirmarFechamento({ vm.fecharCobranca(cobrancaId) { voltar() }; confirmar = false }, { confirmar = false })
+}
+
+@Composable private fun ConfirmarFechamento(confirmar: () -> Unit, cancelar: () -> Unit) = AlertDialog(onDismissRequest = cancelar, title = { Text("Fechar cobrança?") }, text = { Text("Depois de fechada, esta cobrança não poderá ser editada.") }, confirmButton = { TextButton(confirmar) { Text("Fechar cobrança") } }, dismissButton = { TextButton(cancelar) { Text("Cancelar") } })
+
+@Composable private fun TelaRegraDoItem(vm: CobrancaViewModel, itemId: Long?, voltar: () -> Unit) {
+    if (itemId == null) return
+    val item by vm.item(itemId).collectAsStateWithLifecycle(null)
+    val unidades by vm.unidades.collectAsStateWithLifecycle(); val salvas by vm.regraDoItem(itemId).collectAsStateWithLifecycle(emptyList())
+    item ?: return
+    var tipo by remember(itemId) { mutableStateOf(item!!.tipoRegra) }; var valor by remember(itemId) { mutableStateOf(centavosParaCampo(item!!.valorCentavos)) }; var valores by remember(itemId) { mutableStateOf<Map<Long, String>>(emptyMap()) }; var isentas by remember(itemId) { mutableStateOf<Set<Long>>(emptySet()) }; var tentou by remember { mutableStateOf(false) }
+    LaunchedEffect(salvas) { isentas = salvas.filter { it.isenta }.map { it.unidadeId }.toSet(); valores = salvas.associate { it.unidadeId to centavosParaCampo(it.valorCentavos) } }
+    val centavos = valor.paraCentavos(); val incompleto = tipo == TipoRegra.POR_UNIDADE && unidades.any { it.id !in isentas && valores[it.id].orEmpty().paraCentavos() == null }
+    Pagina("Regra do item", voltar) { p -> LazyColumn(Modifier.padding(p).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { Text(item!!.nome, style = MaterialTheme.typography.titleMedium) }; item { TipoRegra.values().forEach { t -> Row(Modifier.clickable { tipo = t }, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { RadioButton(tipo == t, { tipo = t }); Text(nomeDoTipo(t)) } } }
+        if (tipo != TipoRegra.POR_UNIDADE) item { Campo(valor, { valor = it }, if (tipo == TipoRegra.FIXO) "Valor por unidade" else "Valor total a ratear", tentou && centavos == null, KeyboardOptions(keyboardType = KeyboardType.Decimal)) }
+        items(unidades, { it.id }) { u -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(10.dp)) { Text("Unidade ${u.numero} — ${u.nomeMorador}"); Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) { Checkbox(u.id in isentas, { b -> isentas = if (b) isentas + u.id else isentas - u.id }); Text("Isenta") }; if (tipo == TipoRegra.POR_UNIDADE) Campo(valores[u.id].orEmpty(), { v -> valores = valores + (u.id to v) }, "Valor desta unidade", tentou && u.id !in isentas && valores[u.id].orEmpty().paraCentavos() == null, KeyboardOptions(keyboardType = KeyboardType.Decimal)); if (tipo == TipoRegra.PROPORCIONAL) Text("Peso: ${u.peso}") } } }
+        item { Button({ tentou = true; if (!incompleto && (tipo == TipoRegra.POR_UNIDADE || centavos != null)) { val regras = unidades.map { u -> ItemCobrancaRegraUnidade(itemId, u.id, u.id in isentas, valores[u.id].orEmpty().paraCentavos() ?: 0) }; vm.salvarRegraDoItem(item!!.copy(tipoRegra = tipo, valorCentavos = centavos ?: 0), regras, voltar) } }, Modifier.fillMaxWidth()) { Text("Salvar regra") } }
+    } }
+}
+
+@Composable private fun TelaCobrancasFechadas(vm: CobrancaViewModel, abrir: (Long) -> Unit, voltar: () -> Unit) {
+    val cobrancas by vm.cobrancasFechadas.collectAsStateWithLifecycle()
+    Pagina("Cobranças fechadas", voltar) { p -> LazyColumn(Modifier.padding(p).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(cobrancas, { it.id }) { c -> Card(Modifier.fillMaxWidth().clickable { abrir(c.id) }) { Column(Modifier.padding(14.dp)) { Text("${c.mes.toString().padStart(2, '0')}/${c.ano}", style = MaterialTheme.typography.titleMedium); Text("Vencimento: ${c.vencimento}") } } }
+        if (cobrancas.isEmpty()) item { Text("Nenhuma cobrança fechada.") }
+    } }
+}
+
+@Composable private fun TelaDetalheCobranca(vm: CobrancaViewModel, cobrancaId: Long?, voltar: () -> Unit) {
+    var unidades by remember { mutableStateOf<List<CobrancaUnidade>>(emptyList()) }; var linhas by remember { mutableStateOf<Map<Long, List<CobrancaLinha>>>(emptyMap()) }
+    LaunchedEffect(cobrancaId) { cobrancaId?.let { vm.detalhesDaCobranca(it) { u, l -> unidades = u; linhas = l } } }
+    Pagina("Unidades da cobrança", voltar) { p -> LazyColumn(Modifier.padding(p).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(unidades, { it.id }) { u -> val total = linhas[u.id].orEmpty().sumOf { it.valorCentavos }; Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) { Text("Unidade ${u.numeroUnidade} — ${u.nomeMorador}"); Text("Total: ${valorFormatado(total)}", style = MaterialTheme.typography.titleMedium) } } }
+        if (unidades.isEmpty()) item { Text("Carregando unidades...") }
+    } }
+}
+
+@Composable private fun TelaHistoricoUnidades(vm: CobrancaViewModel, abrir: (String) -> Unit, voltar: () -> Unit) {
+    val unidades by vm.unidades.collectAsStateWithLifecycle()
+    Pagina("Histórico por unidade", voltar) { p -> LazyColumn(Modifier.padding(p).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(unidades, { it.id }) { u -> Card(Modifier.fillMaxWidth().clickable { abrir(u.numero) }) { Text("Unidade ${u.numero} — ${u.nomeMorador}", Modifier.padding(14.dp)) } }
+        if (unidades.isEmpty()) item { Text("Nenhuma unidade cadastrada.") }
+    } }
+}
+
+@Composable private fun TelaHistoricoDaUnidade(vm: CobrancaViewModel, numero: String, voltar: () -> Unit) {
+    val cobrancas by vm.cobrancasFechadas.collectAsStateWithLifecycle()
+    var resultado by remember(numero, cobrancas) { mutableStateOf<List<Pair<Cobranca, Pair<CobrancaUnidade, List<CobrancaLinha>>>>(emptyList()) }
+    LaunchedEffect(numero, cobrancas) {
+        vm.historicoDaUnidade(numero, cobrancas) { resultado = it }
+    }
+    Pagina("Histórico da unidade $numero", voltar) { p -> LazyColumn(Modifier.padding(p).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(resultado, { it.first.id }) { (c, dados) -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) { Text("${c.mes.toString().padStart(2, '0')}/${c.ano} — vencimento ${c.vencimento}", style = MaterialTheme.typography.titleMedium); dados.second.forEach { Text("${it.descricao}: ${valorFormatado(it.valorCentavos)}") }; Text("Total: ${valorFormatado(dados.second.sumOf { it.valorCentavos })}") } } }
+        if (resultado.isEmpty()) item { Text("Não há cobranças fechadas para esta unidade.") }
+    } }
+}
 
 private fun nomeDoTipo(tipo: TipoRegra) = when (tipo) {
     TipoRegra.FIXO -> "Valor fixo por unidade"

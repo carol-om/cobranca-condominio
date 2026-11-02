@@ -14,11 +14,12 @@ import androidx.room.TypeConverters
         DespesaUnidade::class,
         Cobranca::class,
         ItemCobranca::class,
+        ItemCobrancaRegraUnidade::class,
         ItemCobrancaUnidade::class,
         CobrancaUnidade::class,
         CobrancaLinha::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 @TypeConverters(ConversoresRoom::class)
@@ -38,7 +39,7 @@ abstract class AppDatabase : RoomDatabase() {
                     contexto.applicationContext,
                     AppDatabase::class.java,
                     "cobranca-condominio.db",
-                ).build().also { instancia = it }
+                ).fallbackToDestructiveMigration().build().also { instancia = it }
             }
     }
 }

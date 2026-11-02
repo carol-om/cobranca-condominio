@@ -108,6 +108,23 @@ data class ItemCobranca(
     val valorCentavos: Long,
 )
 
+/** Valores por unidade do item enquanto a cobrança ainda é um rascunho. */
+@Entity(
+    tableName = "item_cobranca_regra_unidade",
+    primaryKeys = ["itemCobrancaId", "unidadeId"],
+    foreignKeys = [
+        ForeignKey(entity = ItemCobranca::class, parentColumns = ["id"], childColumns = ["itemCobrancaId"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(entity = Unidade::class, parentColumns = ["id"], childColumns = ["unidadeId"], onDelete = ForeignKey.CASCADE),
+    ],
+    indices = [Index("unidadeId")],
+)
+data class ItemCobrancaRegraUnidade(
+    val itemCobrancaId: Long,
+    val unidadeId: Long,
+    val isenta: Boolean = false,
+    val valorCentavos: Long = 0,
+)
+
 @Entity(
     tableName = "cobranca_unidade",
     foreignKeys = [
