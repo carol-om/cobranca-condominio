@@ -79,6 +79,9 @@ interface CobrancaDao {
     @Query("SELECT * FROM cobranca WHERE status = 'FECHADA' ORDER BY ano DESC, mes DESC, id DESC")
     fun observarFechadas(): Flow<List<Cobranca>>
 
+    @Query("DELETE FROM cobranca WHERE status = 'FECHADA'")
+    suspend fun excluirFechadas()
+
     @Query("SELECT * FROM cobranca WHERE id = :id")
     suspend fun buscar(id: Long): Cobranca?
 

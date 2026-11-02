@@ -94,4 +94,9 @@ class CobrancaRepositorio(private val database: AppDatabase) {
 
     suspend fun listarUnidadesFechadas(cobrancaId: Long) = cobrancaDao.listarUnidades(cobrancaId)
     suspend fun listarLinhasDaUnidade(cobrancaUnidadeId: Long) = cobrancaDao.listarLinhas(cobrancaUnidadeId)
+
+    /** Exclui somente o histórico fechado; o rascunho e os cadastros são preservados. */
+    suspend fun excluirHistoricoFechado() = database.withTransaction {
+        cobrancaDao.excluirFechadas()
+    }
 }

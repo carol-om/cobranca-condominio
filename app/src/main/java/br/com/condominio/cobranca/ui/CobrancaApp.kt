@@ -2,6 +2,9 @@ package br.com.condominio.cobranca.ui
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,10 +32,12 @@ import br.com.condominio.cobranca.imagem.GeradorDeImagem
 import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewModel() {
     val condominio = repositorio.observarCondominio().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -71,12 +76,41 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
         }
         pronto(resultado)
     }
+    fun exportarHistorico(uri: Uri, contexto: android.content.Context, pronto: (Boolean) -> Unit) = viewModelScope.launch(Dispatchers.IO) {
+        val texto = montarTextoDoHistorico(repositorio.observarFechadas())
+        val salvo = try {
+            contexto.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(texto) } != null
+        } catch (_: IOException) {
+            false
+        }
+        withContext(Dispatchers.Main) { pronto(salvo) }
+    }
+    fun excluirHistorico(pronto: () -> Unit) = viewModelScope.launch {
+        repositorio.excluirHistoricoFechado()
+        pronto()
+    }
+
+    private suspend fun montarTextoDoHistorico(cobrancas: kotlinx.coroutines.flow.Flow<List<Cobranca>>): String {
+        val resultado = StringBuilder("HISTÓRICO DE COBRANÇAS\n\n")
+        cobrancas.first().forEach { cobranca ->
+            resultado.append("Período: ${cobranca.mes.toString().padStart(2, '0')}/${cobranca.ano}\n")
+            resultado.append("Vencimento: ${cobranca.vencimento}\n")
+            repositorio.listarUnidadesFechadas(cobranca.id).forEach { unidade ->
+                val linhas = repositorio.listarLinhasDaUnidade(unidade.id)
+                resultado.append("\nUnidade ${unidade.numeroUnidade} — ${unidade.nomeMorador}\n")
+                linhas.forEach { linha -> resultado.append("- ${linha.descricao}: ${valorFormatado(linha.valorCentavos)}\n") }
+                resultado.append("Total: ${valorFormatado(linhas.sumOf { it.valorCentavos })}\n")
+            }
+            resultado.append("\n")
+        }
+        return resultado.toString()
+    }
 }
 
 @Composable fun CobrancaApp(viewModel: CobrancaViewModel) {
     val nav = rememberNavController()
     NavHost(nav, "inicio") {
-        composable("inicio") { Inicio({ nav.navigate("condominio") }, { nav.navigate("unidades") }, { nav.navigate("despesas") }, { nav.navigate("nova") }, { nav.navigate("historico-unidades") }, { nav.navigate("fechadas") }) }
+        composable("inicio") { Inicio({ nav.navigate("condominio") }, { nav.navigate("unidades") }, { nav.navigate("despesas") }, { nav.navigate("nova") }, { nav.navigate("historico-unidades") }, { nav.navigate("fechadas") }, { nav.navigate("historico-gerenciar") }) }
         composable("condominio") { TelaCondominio(viewModel) { nav.popBackStack() } }
         composable("unidades") { TelaUnidades(viewModel) { nav.popBackStack() } }
         composable("despesas") { TelaDespesas(viewModel, { nav.navigate("regra/$it") }) { nav.popBackStack() } }
@@ -92,10 +126,11 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
         composable("imagens/{cobrancaId}") { entrada -> TelaImagensDaCobranca(viewModel, entrada.arguments?.getString("cobrancaId")?.toLongOrNull()) { nav.popBackStack() } }
         composable("historico-unidades") { TelaHistoricoUnidades(viewModel, { nav.navigate("historico-unidade/$it") }) { nav.popBackStack() } }
         composable("historico-unidade/{numero}") { entrada -> TelaHistoricoDaUnidade(viewModel, entrada.arguments?.getString("numero").orEmpty()) { nav.popBackStack() } }
+        composable("historico-gerenciar") { TelaHistoricoExportarEExcluir(viewModel) { nav.popBackStack() } }
     }
 }
 
-@Composable private fun Inicio(condominio: () -> Unit, unidades: () -> Unit, despesas: () -> Unit, nova: () -> Unit, historico: () -> Unit, fechadas: () -> Unit) = Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
+@Composable private fun Inicio(condominio: () -> Unit, unidades: () -> Unit, despesas: () -> Unit, nova: () -> Unit, historico: () -> Unit, fechadas: () -> Unit, gerenciarHistorico: () -> Unit) = Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center) {
     Text("Cobrança de condomínio")
     Column(Modifier.fillMaxWidth().padding(top = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(condominio, Modifier.fillMaxWidth()) { Text("Condomínio") }
@@ -104,6 +139,7 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
         Button(nova, Modifier.fillMaxWidth()) { Text("Nova cobrança") }
         Button(historico, Modifier.fillMaxWidth()) { Text("Histórico por unidade") }
         Button(fechadas, Modifier.fillMaxWidth()) { Text("Cobranças fechadas") }
+        Button(gerenciarHistorico, Modifier.fillMaxWidth()) { Text("Histórico: exportar e excluir") }
     }
 }
 
@@ -350,6 +386,72 @@ private fun calcularItem(item: ItemCobranca, unidades: List<Unidade>, regras: Li
         items(resultado, { it.first.id }) { (c, dados) -> Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) { Text("${c.mes.toString().padStart(2, '0')}/${c.ano} — vencimento ${c.vencimento}", style = MaterialTheme.typography.titleMedium); dados.second.forEach { Text("${it.descricao}: ${valorFormatado(it.valorCentavos)}") }; Text("Total: ${valorFormatado(dados.second.sumOf { it.valorCentavos })}") } } }
         if (resultado.isEmpty()) item { Text("Não há cobranças fechadas para esta unidade.") }
     } }
+}
+
+@Composable private fun TelaHistoricoExportarEExcluir(vm: CobrancaViewModel, voltar: () -> Unit) {
+    val contexto = LocalContext.current
+    val cobrancas by vm.cobrancasFechadas.collectAsStateWithLifecycle()
+    var confirmarExclusao by remember { mutableStateOf(false) }
+    var mensagem by remember { mutableStateOf<String?>(null) }
+    val criarDocumento = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri ->
+        if (uri != null) vm.exportarHistorico(uri, contexto) { salvo ->
+            mensagem = if (salvo) "Histórico exportado." else "Não foi possível salvar o arquivo."
+        }
+    }
+
+    Pagina("Histórico: exportar e excluir", voltar) { p ->
+        Column(
+            Modifier.padding(p).fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Exportar histórico resumido", style = MaterialTheme.typography.titleMedium)
+                    Text("Gera um arquivo de texto com as cobranças fechadas por unidade, incluindo período, vencimento, itens e total.")
+                    Button(
+                        onClick = { criarDocumento.launch("historico-cobrancas.txt") },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Exportar arquivo .txt") }
+                    mensagem?.let { Text(it) }
+                }
+            }
+            HorizontalDivider()
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Excluir histórico", style = MaterialTheme.typography.titleMedium)
+                    Text("Remove todas as cobranças fechadas deste aparelho.")
+                    Button(
+                        onClick = { confirmarExclusao = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                        enabled = cobrancas.isNotEmpty(),
+                    ) { Text("Excluir histórico") }
+                    if (cobrancas.isEmpty()) Text("Não há cobranças fechadas para excluir.")
+                }
+            }
+        }
+    }
+    if (confirmarExclusao) {
+        AlertDialog(
+            onDismissRequest = { confirmarExclusao = false },
+            title = { Text("Excluir histórico?") },
+            text = {
+                Text(
+                    "Serão apagadas ${cobrancas.size} cobrança(s) fechada(s), com suas unidades, itens e linhas. " +
+                        "Não serão apagados o condomínio, as unidades, as despesas nem o rascunho atual. " +
+                        "Esta ação não pode ser desfeita e não tem relação com imagens já enviadas pelo WhatsApp.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.excluirHistorico { confirmarExclusao = false } }) {
+                    Text("Excluir histórico", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmarExclusao = false }) { Text("Cancelar") } },
+        )
+    }
 }
 
 private fun nomeDoTipo(tipo: TipoRegra) = when (tipo) {
