@@ -220,7 +220,7 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
             item { Text("Já existe um rascunho. Termine ou feche essa cobrança antes de criar outra.") }
             item { Button({ abrir(rascunho!!.id) }, Modifier.fillMaxWidth()) { Text("Abrir rascunho") } }
         } else {
-            item { Campo(mes, { mes = it }, "Mês (1 a 12)", tentou && mes.toIntOrNull() !in 1..12, KeyboardOptions(keyboardType = KeyboardType.Number)) }
+            item { Campo(mes, { mes = it }, "Mês (1 a 12)", tentou && mes.toIntOrNull()?.let { it !in 1..12 } != false, KeyboardOptions(keyboardType = KeyboardType.Number)) }
             item { Campo(ano, { ano = it }, "Ano", tentou && (ano.toIntOrNull() ?: 0) < 2000, KeyboardOptions(keyboardType = KeyboardType.Number)) }
             item { Campo(vencimento, { vencimento = it }, "Vencimento (ex.: 10/01/2027)", tentou && vencimento.isBlank()) }
             item { Text("Itens da cobrança", style = MaterialTheme.typography.titleMedium) }
@@ -247,7 +247,7 @@ private fun calcularItem(item: ItemCobranca, unidades: List<Unidade>, regras: Li
         item { Text("Conferência por unidade", style = MaterialTheme.typography.titleMedium) }
         items(unidades, { it.id }) { unidade ->
             val itensDaUnidade = calculos.mapNotNull { (item, valores) -> valores[unidade.id]?.takeIf { it > 0 }?.let { item.nome to it } }
-            Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text("Unidade ${unidade.numero} — ${unidade.nomeMorador}", style = MaterialTheme.typography.titleMedium); itensDaUnidade.forEach { (nome, valor) -> Text("$nome: ${valorFormatado(valor)}") }; Text("Total: ${valorFormatado(itensDaUnidade.sumOf { it.second })}") }
+            Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) { Text("Unidade ${unidade.numero} — ${unidade.nomeMorador}", style = MaterialTheme.typography.titleMedium); itensDaUnidade.forEach { (nome, valor) -> Text("$nome: ${valorFormatado(valor)}") }; Text("Total: ${valorFormatado(itensDaUnidade.sumOf { it.second })}") } }
         }
         item { Text("Itens do mês (toque para editar)", style = MaterialTheme.typography.titleMedium) }
         items(calculos, { it.first.id }) { (item, _) -> Card(Modifier.fillMaxWidth().clickable { editar(item.id) }) { Text(item.nome, Modifier.padding(12.dp)) } }
