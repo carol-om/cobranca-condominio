@@ -53,7 +53,7 @@ class CobrancaViewModel(private val repositorio: CobrancaRepositorio) : ViewMode
         val unidades = repositorio.listarUnidadesFechadas(id)
         pronto(unidades, unidades.associate { it.id to repositorio.listarLinhasDaUnidade(it.id) })
     }
-    fun historicoDaUnidade(numero: String, cobrancas: List<Cobranca>, pronto: (List<Pair<Cobranca, Pair<CobrancaUnidade, List<CobrancaLinha>>>) -> Unit) = viewModelScope.launch {
+    fun historicoDaUnidade(numero: String, cobrancas: List<Cobranca>, pronto: (List<Pair<Cobranca, Pair<CobrancaUnidade, List<CobrancaLinha>>>>) -> Unit) = viewModelScope.launch {
         val resultado = mutableListOf<Pair<Cobranca, Pair<CobrancaUnidade, List<CobrancaLinha>>>>()
         cobrancas.forEach { cobranca ->
             repositorio.listarUnidadesFechadas(cobranca.id).firstOrNull { it.numeroUnidade == numero }?.let { unidade ->
