@@ -303,7 +303,7 @@ private fun calcularItem(item: ItemCobranca, unidades: List<Unidade>, regras: Li
 
 @Composable private fun TelaHistoricoDaUnidade(vm: CobrancaViewModel, numero: String, voltar: () -> Unit) {
     val cobrancas by vm.cobrancasFechadas.collectAsStateWithLifecycle()
-    var resultado by remember(numero, cobrancas) { mutableStateOf<List<Pair<Cobranca, Pair<CobrancaUnidade, List<CobrancaLinha>>>>(emptyList()) }
+    var resultado by remember(numero, cobrancas) { mutableStateOf<List<Pair<Cobranca, Pair<CobrancaUnidade, List<CobrancaLinha>>>>>(emptyList()) }
     LaunchedEffect(numero, cobrancas) {
         vm.historicoDaUnidade(numero, cobrancas) { resultado = it }
     }
